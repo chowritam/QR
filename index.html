@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Quick Secure QR (AES-GCM)</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;max-width:760px;margin:18px auto;padding:12px}
+  h1{font-size:1.2rem;margin:6px 0}
+  label{display:block;margin-top:8px}
+  textarea,input{width:100%;box-sizing:border-box;padding:8px;margin-top:6px}
+  .row{display:flex;gap:8px}
+  button{padding:8px 12px;margin-top:10px;border-radius:8px}
+  #qrcode{margin-top:12px}
+  .small{font-size:0.9rem;color:#444}
+</style>
+</head>
+<body>
+  <h1>Quick Secure QR — Encrypt / Decrypt (AES-GCM, PBKDF2)</h1>
+
+  <div id="encrypt-section">
+    <label>Message to encrypt (short text)</label>
+    <textarea id="plain" rows="4" placeholder="Type message here..."></textarea>
+
+    <label>Password / passcode</label>
+    <input id="password" type="password" placeholder="Enter passcode used to decrypt" />
+
+    <div class="row">
+      <button id="encryptBtn">Encrypt & Generate QR</button>
+      <button id="copyPayloadBtn" style="display:none">Copy payload</button>
+      <button id="clearBtn" style="background:#eee">Clear</button>
+    </div>
+
+    <div id="qrcode" aria-hidden="true"></div>
+    <div class="small">QR contains encrypted payload only. Share QR; share password separately.</div>
+  </div>
+
+  <hr/>
+
+  <div id="decrypt-section">
+    <label>Paste payload (or scan QR and paste the text)</label>
+    <textarea id="payload" rows="3" placeholder="Payload goes here (or scan QR to get it)"></textarea>
+
+    <label>Password / passcode to decrypt</label>
+    <input id="password2" type="password" placeholder="Enter passcode to decrypt" />
+
+    <div class="row">
+      <button id="decryptBtn">Decrypt</button>
+      <button id="pasteFromHashBtn" style="display:none">Load payload from URL</button>
+    </div>
+
+    <label>Decrypted message</label>
+    <textarea id="decrypted" rows="4" readonly placeholder="Decrypted text will appear here"></textarea>
+  </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+/* helpers: base64 <-> Uint8Array */
+function u8ToB64(u8){ return btoa(String.fromCharCode(...u8)); }
+function b64ToU8(b64){ return Uint8Array.from(atob(b64), c=>c.charCodeAt(0)); }
+
+/* crypto helpers using Web Crypto */
+async function deriveKey(password, salt, iterations=200000) {
+  const enc = new TextEncoder();
+  const pwKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {name:'PBKDF2',salt,iterations,hash:'SHA-256'},
+    pwKey,
+    {name:'AES-GCM',length:256},
+    false,
+    ['encrypt','decrypt']
+  );
+}
+
+async function encryptText(password, plainText) {
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(password, salt);
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM',iv}, key, enc.encode(plainText));
+  // package as base64 parts: salt:iv:ciphertext
+  return u8ToB64(salt) + ":" + u8ToB64(iv) + ":" + u8ToB64(new Uint8Array(ct));
+}
+
+async function decryptPayload(password, payload) {
+  const parts = payload.trim().split(':');
+  if(parts.length !== 3) throw new Error('Payload format incorrect.');
+  const salt = b64ToU8(parts[0]);
+  const iv = b64ToU8(parts[1]);
+  const ct = b64ToU8(parts[2]);
+  const key = await deriveKey(password, salt);
+  const plainBuf = await crypto.subtle.decrypt({name:'AES-GCM',iv}, key, ct);
+  return new TextDecoder().decode(plainBuf);
+}
+
+/* UI wiring */
+const qrContainer = document.getElementById('qrcode');
+let qr = null;
+
+document.getElementById('encryptBtn').addEventListener('click', async ()=>{
+  const plain = document.getElementById('plain').value || '';
+  const pass = document.getElementById('password').value || '';
+  if(!plain){ alert('Type a message first'); return; }
+  if(!pass){ if(!confirm('No password entered. Continue without password?')) return; }
+  try {
+    const payload = await encryptText(pass, plain);
+    // render QR (text payload)
+    qrContainer.innerHTML = ''; qr = new QRCode(qrContainer, {text:payload, width:300, height:300});
+    document.getElementById('payload').value = payload; // also show in decrypt box
+    document.getElementById('copyPayloadBtn').style.display='inline-block';
+    // Optionally update URL fragment for hosted usage:
+    // window.location.hash = payload;
+  } catch(e){ alert('Encryption failed: '+e.message); }
+});
+
+document.getElementById('decryptBtn').addEventListener('click', async ()=>{
+  const payload = document.getElementById('payload').value.trim();
+  const pass = document.getElementById('password2').value || '';
+  if(!payload){ alert('Paste or load a payload first'); return; }
+  try{
+    const plain = await decryptPayload(pass, payload);
+    document.getElementById('decrypted').value = plain;
+  } catch(e){
+    alert('Decryption failed — wrong passcode or corrupted payload.');
+  }
+});
+
+document.getElementById('copyPayloadBtn').addEventListener('click', ()=>{
+  const t = document.getElementById('payload');
+  t.value = document.getElementById('payload').value; // ensure exists
+  navigator.clipboard.writeText(t.value).then(()=>alert('Payload copied to clipboard.'));
+});
+
+document.getElementById('clearBtn').addEventListener('click', ()=>{
+  document.getElementById('plain').value=''; document.getElementById('password').value=''; qrContainer.innerHTML=''; document.getElementById('copyPayloadBtn').style.display='none';
+});
+
+/* If the page is opened with a URL hash (hosted scenario), auto-load it into payload */
+window.addEventListener('load', ()=>{
+  if(window.location.hash && window.location.hash.length>1){
+    const p = decodeURIComponent(window.location.hash.slice(1));
+    document.getElementById('payload').value = p;
+    // show a button to quickly attempt decrypt (user still needs to type password)
+    document.getElementById('pasteFromHashBtn').style.display='inline-block';
+    document.getElementById('pasteFromHashBtn').addEventListener('click', ()=>{ document.getElementById('payload').value = p; });
+  }
+});
+</script>
+</body>
+</html>
