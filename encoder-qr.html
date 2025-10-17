@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Secure QR Encoder → Decoder</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 500px; margin: 40px auto; padding: 10px; }
+  h1 { font-size: 1.5rem; margin-bottom: 20px; text-align: center; }
+  label { display: block; margin: 12px 0 6px; font-weight: bold; }
+  textarea, input { width: 100%; padding: 10px; box-sizing: border-box; border-radius: 6px; border: 1px solid #ccc; font-size: 1rem; }
+  button { margin-top: 15px; padding: 10px 16px; font-size: 1rem; border-radius: 6px; border: none; background: #28a745; color: white; cursor: pointer; width: 100%; }
+  button:hover { background: #218838; }
+  #qrcode { margin-top: 20px; text-align:center; }
+  .small { font-size: 0.9rem; color: #444; margin-top: 6px; text-align:center; }
+</style>
+</head>
+<body>
+<h1>Secure QR → Decoder</h1>
+
+<label>Message to encrypt</label>
+<textarea id="message" rows="4" placeholder="Type your message here"></textarea>
+
+<label>Enter passcode</label>
+<input type="password" id="password" placeholder="Passcode" />
+
+<button id="generateBtn">Generate QR</button>
+
+<div id="qrcode"></div>
+<div class="small">Scan QR → opens decoder page → enter passcode to decrypt.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+function u8ToB64(u8){ return btoa(String.fromCharCode(...u8)); }
+function urlEncode(str){ return encodeURIComponent(str); }
+
+async function deriveKey(password, salt, iterations=200000){
+  const enc = new TextEncoder();
+  const pwKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations,hash:'SHA-256'}, pwKey, {name:'AES-GCM',length:256}, false, ['encrypt','decrypt']);
+}
+
+async function encryptMessage(password, message){
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(password, salt);
+  const ct = await crypto.subtle.encrypt({name:'AES-GCM',iv}, key, enc.encode(message));
+  return u8ToB64(salt)+":"+u8ToB64(iv)+":"+u8ToB64(new Uint8Array(ct));
+}
+
+// REPLACE THIS WITH YOUR HOSTED DECODER PAGE URL
+const DECODER_URL = "https://chowritam.github.io/QR/";
+
+document.getElementById('generateBtn').addEventListener('click', async ()=>{
+  const message = document.getElementById('message').value.trim();
+  const password = document.getElementById('password').value.trim();
+  if(!message){ alert('Enter a message first'); return; }
+  if(!password){ alert('Enter a passcode'); return; }
+  try{
+    const payload = await encryptMessage(password, message);
+    const urlFragment = DECODER_URL + "#" + urlEncode(payload);
+    document.getElementById('qrcode').innerHTML = '';
+    new QRCode(document.getElementById('qrcode'), {text:urlFragment, width:300, height:300});
+  } catch(e){
+    alert('Encryption failed: '+e.message);
+  }
+});
+</script>
+</body>
+</html>
