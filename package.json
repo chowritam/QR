@@ -1,0 +1,1 @@
+{\n  "name": "qr-protected",\n  "version": "1.0.0",\n  "private": true,\n  "scripts": {\n    "dev": "next dev -p 3000",\n    "build": "next build",\n    "start": "next start -p 3000"\n  },\n  "dependencies": {\n    "next": "14.2.0",\n    "react": "18.2.0",\n    "react-dom": "18.2.0",\n    "qrcode.react": "^1.0.0"\n  }\n}
